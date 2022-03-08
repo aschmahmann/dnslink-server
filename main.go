@@ -53,29 +53,9 @@ func writeGit(w io.Writer, r *dns.Msg) error {
 		return errors.New("only TXT records are supported")
 	}
 
-	// Expected format is head.repobase-repopath.git which will become https://repo
-	// where any - in the name must be replaced with --.
-	// Not yet supported: characters valid in path but not domain name, http (not https)
-	parts := strings.Split(n, ".")
-	if len(parts) < 4 {
-		return errors.New("needs more at least 4 domain parts")
-	}
-
-	head := parts[0]
-	parts = parts[1 : len(parts)-2]
-	repo := "https://"
-	var repobase, repopath string
-	for i, p := range parts {
-		if p == "-" {
-			repobase = strings.Join(parts[i+1:], ".")
-			reverse(parts[:i])
-			repopath = strings.Join(parts[:i], "/")
-			repo += repobase + "/" + repopath
-			break
-		}
-	}
-	if repobase == "" {
-		repo = strings.Join(parts, ".")
+	head, repo, err := dnsNameToGit(n)
+	if err != nil {
+		return err
 	}
 
 	res, err := exec.Command("git", "ls-remote", repo).Output()
@@ -126,6 +106,45 @@ func writeGit(w io.Writer, r *dns.Msg) error {
 		return err
 	}
 	return nil
+}
+
+// dnsNameToGit takes a DNS name and tries to interpret it as a git branch name and repo
+// Returns branchName, repo, error
+//
+// The format is `head.repolocation.git.` listed in the canonical most general to most specific ordering.
+// For example: github.com/ipfs/go-ipfs@master -> `master.go-ipfs.ipfs.-.github.com.git.`
+//
+// Not yet supported: characters valid in path but not within a DNS label (a common one being `.`)
+// Only supports HTTPS accessible Git repos
+//
+// For example, `master.go-ipfs.ipfs.-.github.com.git.` would become return a branch name "master"
+// and a repo "https://github.com/ipfs/go-ipfs". This could be resolved as `/ipns/master.go-ipfs.ipfs.-.github.com.git`
+//
+// TODO: This encoding is not valid DNS since `-` is not a valid DNS label
+func dnsNameToGit(name string) (string, string, error) {
+	parts := strings.Split(name, ".")
+	if len(parts) < 4 {
+		return "", "", errors.New("needs more at least 4 domain parts")
+	}
+
+	head := parts[0]
+	parts = parts[1 : len(parts)-2]
+	repo := "https://"
+	var repobase, repopath string
+	for i, p := range parts {
+		if p == "-" {
+			repobase = strings.Join(parts[i+1:], ".")
+			reverse(parts[:i])
+			repopath = strings.Join(parts[:i], "/")
+			repo += repobase + "/" + repopath
+			break
+		}
+	}
+	if repobase == "" {
+		repo = strings.Join(parts, ".")
+	}
+
+	return head, repo, nil
 }
 
 func reverse(ss []string) {
